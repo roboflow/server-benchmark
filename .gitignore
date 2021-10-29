@@ -1,3 +1,6 @@
+.roboflow_key
+package-lock.json
+
 # Logs
 logs
 *.log

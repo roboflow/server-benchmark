@@ -1,0 +1,24 @@
+{
+  "name": "roboflow-server-benchmark",
+  "version": "1.0.0",
+  "description": "Measures inference throughput",
+  "main": "benchmark.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/roboflow-ai/server-benchmark.git"
+  },
+  "author": "",
+  "license": "Apache-2.0",
+  "bugs": {
+    "url": "https://github.com/roboflow-ai/server-benchmark/issues"
+  },
+  "homepage": "https://github.com/roboflow-ai/server-benchmark#readme",
+  "dependencies": {
+    "async": "^3.2.2",
+    "axios": "^0.24.0",
+    "lodash": "^4.17.21"
+  }
+}
