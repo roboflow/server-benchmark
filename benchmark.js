@@ -17,7 +17,7 @@ const CONFIG = {
         process.env.ROBOFLOW_API_KEY ||
         "YOUR API KEY HERE"
     ),
-    trt: true // set to false unless using the :trt or :trt-jetson dockers which need to be warmed up
+    trt: false // set to false unless using the :trt or :trt-jetson dockers which need to be warmed up
 };
 
 var buffers = {};
