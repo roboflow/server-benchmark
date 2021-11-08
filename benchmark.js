@@ -116,7 +116,7 @@ function infer(buffer, path) {
             }
         })
         .then(function(response) {
-            var predictions = response.data;
+            var predictions = response.data.predictions;
 
             var elapsed = ((Date.now() - start)/1000).toFixed(2);
             console.log("Inference on", path, "found", predictions.length, "objects in", elapsed, "seconds");
