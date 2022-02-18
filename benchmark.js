@@ -18,6 +18,7 @@ const CONFIG = {
     workspace: "brad-dwyer",
     model: "egohands-public/5", // your model ID here
     split: "valid", // one of [train, valid, test]; will be pulled from the project on Roboflow
+    confidence: 0.5, // adjust the confidence threshold (for true mAP calculation, use 0.00001)
     parallelism: 32, // how many async requests to fire at a time; use 1 to use sequential mode
     api_key: (
         findAndReadFile(".roboflow_key") ||
@@ -30,24 +31,60 @@ const CONFIG = {
 };
 
 const outputDir = [__dirname, "datasets", CONFIG.model].join("/");
+var dataDir = [outputDir, CONFIG.split].join("/");
 
 var images = [];
 var buffers = {};
 
 downloadDataset()
 .then(prepareData)
-.then(warmup).then(function() {
-    var begin = Date.now();
-    async.eachOfLimit(buffers, CONFIG.parallelism, function(buffer, path, cb) {
-        infer(buffer, path)
-            .finally(function() {
-                cb(null);
-            });
-    }, function() {
-        var elapsed = ((Date.now() - begin)/1000).toFixed(2);
-        console.log("Inferred", images.length, "times in", elapsed, "seconds", images.length/elapsed, "fps");
+.then(warmup)
+.then(inferAll)
+.then(calculateAccuracy);
+
+function inferAll() {
+    return new Promise(function(resolve, reject) {
+        var begin = Date.now();
+        async.eachOfLimit(buffers, CONFIG.parallelism, function(buffer, path, cb) {
+            infer(buffer, path)
+                .finally(function() {
+                    cb(null);
+                });
+        }, function() {
+            var elapsed = ((Date.now() - begin)/1000).toFixed(2);
+            console.log("Inferred", images.length, "times in", elapsed, "seconds", images.length/elapsed, "fps");
+
+            resolve();
+        });
     });
-});
+}
+
+function calculateAccuracy() {
+    console.log("Calculating Accuracy");
+
+    var formattedPredictions = [];
+    _.each(allPredictions, function(prediction, path) {
+        _.each(prediction, function(box) {
+            formattedPredictions.push({
+                filename: path,
+                confidence: box.confidence,
+                label: box.class,
+                left: box.x - box.width/2,
+                top: box.y - box.height/2,
+                bottom: box.y + box.height/2,
+                right: box.x + box.width/2
+            })
+        });
+    });
+
+    var groundTruths = JSON.parse(fs.readFileSync([dataDir, "_groundtruth.json"].join("/"), "utf-8"));
+    
+    var map = mAP({
+        groundTruths: groundTruths,
+        predictions: formattedPredictions
+    });
+    console.log(CONFIG.split, "mAP at 0.5:", map);
+}
 
 /* recursively searches for file in this or any parent directory and returns its contents */
 function findAndReadFile(filename) {
@@ -114,6 +151,7 @@ function warmup() {
     });
 }
 
+var allPredictions = {};
 function infer(buffer, path) {
     return new Promise(function(resolve, reject) {
         var start = Date.now();
@@ -121,7 +159,8 @@ function infer(buffer, path) {
             method: "POST",
             url: [CONFIG.server, CONFIG.model].join("/"),
             params: {
-                api_key: CONFIG.api_key
+                api_key: CONFIG.api_key,
+                confidence: CONFIG.confidence
             },
             data: buffer,
             headers: {
@@ -130,6 +169,7 @@ function infer(buffer, path) {
         })
         .then(function(response) {
             var predictions = response.data.predictions;
+            allPredictions[path] = predictions;
 
             var elapsed = ((Date.now() - start)/1000).toFixed(2);
             console.log("Inference on", path, "found", predictions.length, "objects in", elapsed, "seconds");
@@ -228,14 +268,6 @@ function downloadDataset() {
                             });
                         });
                     });
-                    
-                    // const images = fs.readdirSync("images");
-                    // _.each(images, function(path) {
-                    //     buffers[path] = fs.readFileSync("images/" + path, {
-                    //         encoding: "base64"
-                    //     });
-                    // });
-                    // resolve();
                 }).catch(function(error) {
                     console.log("Dataset download failed. Please ensure you have created an export of the dataset using the `Server Benchmark` format.");
                 });
@@ -248,5 +280,16 @@ function downloadDataset() {
 }
 
 function prepareData() {
+    return new Promise(function(resolve, reject) {
+        images = fs.readdirSync(dataDir);
+        _.each(images, function(filePath) {
+            // only use images
+            if(!["jpg", "jpeg", "png"].includes(filePath.split(".").pop().toLowerCase())) return;
 
+            buffers[filePath] = fs.readFileSync([dataDir, filePath].join("/"), {
+                encoding: "base64"
+            });
+        });
+        resolve();
+    });
 }
