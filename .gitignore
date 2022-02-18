@@ -1,5 +1,6 @@
 .roboflow_key
 package-lock.json
+datasets
 
 # Logs
 logs

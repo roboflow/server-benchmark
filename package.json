@@ -19,6 +19,9 @@
   "dependencies": {
     "async": "^3.2.2",
     "axios": "^0.24.0",
-    "lodash": "^4.17.21"
+    "cli-progress": "^3.10.0",
+    "lodash": "^4.17.21",
+    "mean-average-precision": "^1.8.2",
+    "mkdirp": "^1.0.4"
   }
 }
