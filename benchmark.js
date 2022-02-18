@@ -29,6 +29,8 @@ const CONFIG = {
     trt: false // set to false unless using the :trt or :trt-jetson dockers which need to be warmed up
 };
 
+const outputDir = [__dirname, "datasets", CONFIG.model].join("/");
+
 var images = [];
 var buffers = {};
 
@@ -156,7 +158,6 @@ function infer(buffer, path) {
 
 function downloadDataset() {
     return new Promise(function(resolve, reject) {
-        var outputDir = [__dirname, "datasets", CONFIG.model].join("/");
         fs.access(outputDir, function(error) {
             if (error) {
                 // directory does not exist; download dataset
@@ -228,8 +229,6 @@ function downloadDataset() {
                         });
                     });
                     
-                    // https://api.roboflow.com/brad-dwyer/egohands-public/5/voc?api_key=XuUmiujAqpvfwxXatJdA
-    
                     // const images = fs.readdirSync("images");
                     // _.each(images, function(path) {
                     //     buffers[path] = fs.readFileSync("images/" + path, {
