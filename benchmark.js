@@ -15,11 +15,11 @@ const cliProgress = require('cli-progress');
 
 const CONFIG = {
     server: "https://detect.roboflow.com", // or your server IP, eg "http://192.168.4.128:9001"
-    workspace: "brad-dwyer",
-    model: "egohands-public/5", // your model ID here
+    workspace: "jacob-solawetz",
+    model: "pills-homepage/4", // your model ID here
     split: "valid", // one of [train, valid, test]; will be pulled from the project on Roboflow
-    confidence: 0.5, // adjust the confidence threshold (for true mAP calculation, use 0.00001)
-    parallelism: 32, // how many async requests to fire at a time; use 1 to use sequential mode
+    confidence: 0.4, // adjust the confidence threshold (for true mAP calculation, use 0.00001)
+    parallelism: 1, // how many async requests to fire at a time; use 1 to use sequential mode
     api_key: (
         findAndReadFile(".roboflow_key") ||
         process.env.ROBOFLOW_KEY ||
@@ -154,6 +154,10 @@ function warmup() {
 var allPredictions = {};
 function infer(buffer, path) {
     return new Promise(function(resolve, reject) {
+        //extra catch to not run predictions on ground truth annotations
+        if (path == "_groundtruth.json") {
+            resolve({"predictions": []});
+        }
         var start = Date.now();
         axios({
             method: "POST",
