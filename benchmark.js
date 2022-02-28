@@ -269,6 +269,7 @@ function downloadDataset() {
                         });
                     });
                 }).catch(function(error) {
+                    console.log(error);
                     console.log("Dataset download failed. Please ensure you have created an export of the dataset using the `Server Benchmark` format.");
                 });
             } else {
