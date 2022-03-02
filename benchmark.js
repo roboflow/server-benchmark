@@ -6,40 +6,85 @@ const _ = require("lodash");
 
 const process = require("process");
 const fs = require("fs");
+const { resolve } = require("path");
+const child_process = require('child_process');
+
+const mAP = require('mean-average-precision');
+const mkdirp = require('mkdirp');
+const cliProgress = require('cli-progress');
 
 const CONFIG = {
     server: "https://detect.roboflow.com", // or your server IP, eg "http://192.168.4.128:9001"
-    model: "egohands-public/5", // your model ID here
-    parallelism: 32, // how many async requests to fire at a time; use 1 to use sequential mode
+    workspace: "jacob-solawetz",
+    model: "pills-homepage/4", // your model ID here
+    split: "valid", // one of [train, valid, test]; will be pulled from the project on Roboflow
+    confidence: 0.4, // adjust the confidence threshold (for true mAP calculation, use 0.00001)
+    parallelism: 1, // how many async requests to fire at a time; use 1 to use sequential mode
     api_key: (
         findAndReadFile(".roboflow_key") ||
         process.env.ROBOFLOW_KEY ||
         process.env.ROBOFLOW_API_KEY ||
         "YOUR API KEY HERE"
     ),
+    api_endpoint: "https://api.roboflow.com",
     trt: false // set to false unless using the :trt or :trt-jetson dockers which need to be warmed up
 };
 
-var buffers = {};
-const images = fs.readdirSync("images");
-_.each(images, function(path) {
-    buffers[path] = fs.readFileSync("images/" + path, {
-        encoding: "base64"
-    });
-});
+const outputDir = [__dirname, "datasets", CONFIG.model].join("/");
+var dataDir = [outputDir, CONFIG.split].join("/");
 
-warmup().then(function() {
-    var begin = Date.now();
-    async.eachOfLimit(buffers, CONFIG.parallelism, function(buffer, path, cb) {
-        infer(buffer, path)
-            .finally(function() {
-                cb(null);
-            });
-    }, function() {
-        var elapsed = ((Date.now() - begin)/1000).toFixed(2);
-        console.log("Inferred", images.length, "times in", elapsed, "seconds", images.length/elapsed, "fps");
+var images = [];
+var buffers = {};
+
+downloadDataset()
+.then(prepareData)
+.then(warmup)
+.then(inferAll)
+.then(calculateAccuracy);
+
+function inferAll() {
+    return new Promise(function(resolve, reject) {
+        var begin = Date.now();
+        async.eachOfLimit(buffers, CONFIG.parallelism, function(buffer, path, cb) {
+            infer(buffer, path)
+                .finally(function() {
+                    cb(null);
+                });
+        }, function() {
+            var elapsed = ((Date.now() - begin)/1000).toFixed(2);
+            console.log("Inferred", images.length, "times in", elapsed, "seconds", images.length/elapsed, "fps");
+
+            resolve();
+        });
     });
-});
+}
+
+function calculateAccuracy() {
+    console.log("Calculating Accuracy");
+
+    var formattedPredictions = [];
+    _.each(allPredictions, function(prediction, path) {
+        _.each(prediction, function(box) {
+            formattedPredictions.push({
+                filename: path,
+                confidence: box.confidence,
+                label: box.class,
+                left: box.x - box.width/2,
+                top: box.y - box.height/2,
+                bottom: box.y + box.height/2,
+                right: box.x + box.width/2
+            })
+        });
+    });
+
+    var groundTruths = JSON.parse(fs.readFileSync([dataDir, "_groundtruth.json"].join("/"), "utf-8"));
+    
+    var map = mAP({
+        groundTruths: groundTruths,
+        predictions: formattedPredictions
+    });
+    console.log(CONFIG.split, "mAP at 0.5:", map);
+}
 
 /* recursively searches for file in this or any parent directory and returns its contents */
 function findAndReadFile(filename) {
@@ -55,6 +100,11 @@ function findAndReadFile(filename) {
 
 function warmup() {
     return new Promise(function(resolve, reject) {
+        if(!images.length) {
+            console.log("No images found, exiting.");
+            return resolve();
+        }
+
         var start = Date.now();
         console.log("Warming up...");
 
@@ -101,14 +151,20 @@ function warmup() {
     });
 }
 
+var allPredictions = {};
 function infer(buffer, path) {
     return new Promise(function(resolve, reject) {
+        //extra catch to not run predictions on ground truth annotations
+        if (path == "_groundtruth.json") {
+            resolve({"predictions": []});
+        }
         var start = Date.now();
         axios({
             method: "POST",
             url: [CONFIG.server, CONFIG.model].join("/"),
             params: {
-                api_key: CONFIG.api_key
+                api_key: CONFIG.api_key,
+                confidence: CONFIG.confidence
             },
             data: buffer,
             headers: {
@@ -117,6 +173,7 @@ function infer(buffer, path) {
         })
         .then(function(response) {
             var predictions = response.data.predictions;
+            allPredictions[path] = predictions;
 
             var elapsed = ((Date.now() - start)/1000).toFixed(2);
             console.log("Inference on", path, "found", predictions.length, "objects in", elapsed, "seconds");
@@ -140,5 +197,104 @@ function infer(buffer, path) {
 
             reject(error);
         });
+    });
+}
+
+function downloadDataset() {
+    return new Promise(function(resolve, reject) {
+        fs.access(outputDir, function(error) {
+            if (error) {
+                // directory does not exist; download dataset
+                
+                axios({
+                    method: "GET",
+                    url: [CONFIG.api_endpoint, CONFIG.workspace, CONFIG.model, "benchmarker"].join("/"),
+                    params: {
+                        api_key: CONFIG.api_key
+                    }
+                }).then(function(response) {
+                    mkdirp(__dirname + "/datasets").then(function() {
+                        var link = response.data.export.link;
+                        console.log("Downloading Dataset...");
+
+                        axios({
+                            url: link,
+                            method: 'GET',
+                            responseType: 'stream' // important
+                        }).then(function (response) {
+                            var zipFile = [
+                                __dirname,
+                                "datasets",
+                                CONFIG.model.replace("/", "-") + ".zip"
+                            ].join("/");
+                            const writer = fs.createWriteStream(zipFile);
+
+                            const progressBar = new cliProgress.SingleBar({
+                                format: '{bar} | {percentage}% | ETA: {estimate} | {value}/{total} MB'
+                            }, cliProgress.Presets.shades_classic);
+                            progressBar.start(Math.ceil(response.headers['content-length']/1000000), 0);
+
+                            response.data.pipe(writer);
+
+                            var start = Date.now();
+
+                            var progress = 0;
+                            response.data.on('data', function(chunk) {
+                                progress += chunk.length;
+
+                                var elapsed = Date.now() - start;
+                                var percent = progress / response.headers['content-length'];
+                                var speed = percent / elapsed;
+                                
+                                var secondsLeft = (1 - percent) / speed / 1000;
+
+                                var timeLeft = Math.round(secondsLeft) + "s";
+                                if(secondsLeft > 60*60) {
+                                    timeLeft = (secondsLeft/60/60).toFixed(1) + " hours";
+                                } else if(secondsLeft > 90) {
+                                    timeLeft = (secondsLeft/60).toFixed(1) + " minutes";
+                                }
+
+                                progressBar.update(Math.floor(progress/1000000), {
+                                    estimate: timeLeft
+                                });
+                            })
+
+                            writer.on("finish", function() {
+                                progressBar.update(Math.ceil(response.headers['content-length']/1000000));
+                                progressBar.stop();
+                                
+                                console.log("Unzipping...");
+                                mkdirp(outputDir).then(function() {
+                                    child_process.execSync(`unzip ${zipFile} -d ${outputDir}; rm ${zipFile}`, { stdio: 'ignore' });
+                                    resolve();
+                                });
+                            });
+                        });
+                    });
+                }).catch(function(error) {
+                    console.log(error);
+                    console.log("Dataset download failed. Please ensure you have created an export of the dataset using the `Server Benchmark` format.");
+                });
+            } else {
+                // directory already exists... continue
+                resolve();
+            }
+        });
+    });
+}
+
+function prepareData() {
+    return new Promise(function(resolve, reject) {
+        images = fs.readdirSync(dataDir);
+        _.each(images, function(filePath) {
+            // only use images
+            if(!["jpg", "jpeg", "png"].includes(filePath.split(".").pop().toLowerCase())) return;
+
+            buffers[filePath] = fs.readFileSync([dataDir, filePath].join("/"), {
+                encoding: "base64"
+            });
+        });
+        resolve();
     });
 }
